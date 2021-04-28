@@ -104,9 +104,8 @@ proc expand(n: NimNode, depth: int = 0): NimNode {.compileTime.} =
             result = quote do:
                 `result` & `exp`
         debug space
-        buff.add("</" & name.strVal & ">")
-    else:
-        buff.add("/>")
+    
+    buff.add("</" & name.strVal & ">")
     debug "\n"
     
     let lit = newLit(buff)
