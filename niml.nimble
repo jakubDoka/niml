@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.1.2"
+version       = "0.1.4"
 author        = "Jakub Dóka"
 description   = "html dsl"
 license       = "MIT"
