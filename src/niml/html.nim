@@ -92,8 +92,8 @@ proc expand(n: NimNode, depth: int = 0): NimNode {.compileTime.} =
                     buff = ""
 
     var last = n[n.len-1]
+    buff.add(">")
     if last.matches(StmtList()):
-        buff.add(">")
         debug "\n"
         let lit = newLit(buff)
         result = quote do:
@@ -165,14 +165,14 @@ when isMainModule:
                     @(3 + 5 + val)
     assert pg == """<html lang="en" kub="flee">
   <head>
-    <meta charset="UTF-8"/>
-    <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <meta charset="UTF-8"></meta>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge"></meta>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"></meta>
     <title>Fonting</title>
   </head>
   <body>
     <h1>Hello there</h1>
-    <p hello="hello there"/>
+    <p hello="hello there"></p>
     <p>hello there</p>
     <p>
       hello there
@@ -181,7 +181,7 @@ when isMainModule:
     </p>
   </body>
 </html>
-"""
+""", pg
     let ten = 10
     let text = "text"
 
