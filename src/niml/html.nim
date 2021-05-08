@@ -1,116 +1,195 @@
-import macros, fusion/matching, strutils
+import macros, strutils
     
-proc toString(n: NimNode): string {.compileTime.} = 
-    if n.kind == nnkAccQuoted:
-        for i in n:
-            result.add(i.strVal)
+type
+  NodeKind = enum
+    nkString
+    nkNode
+  Node = object
+    case kind: NodeKind
+    of nkString:
+      str: string
+    of nkNode:
+      node: NimNode
+  Pointer = tuple
+    node: NimNode
+    index: int
+
+template toNimNode(n: Node): NimNode =
+  case n.kind:
+  of nkString:
+    newLit(n.str)
+  else:
+    newTree(nnkPrefix, ident("$"), n.node)
+
+template ifDebug(code, eCode: untyped): untyped =
+  when defined(debug):
+    code
+  else:
+    eCode
+
+template front(tag: string): untyped =
+  "<" & tag & ">"
+
+template ending(tag: string): untyped =
+  "</" & tag & ">"
+
+template str(s: string): Node =
+  Node(kind: nkString, str: s)
+
+template node(n: NimNode): Node =
+  if n[0].strVal != "@":
+    err("external values can be prefixed only with '@'", n)
+  Node(kind: nkNode, node: n[1])
+
+template err(message: string, node: NimNode) =
+  error(node.lineInfo & ": " & message)
+
+template ind(amount: int): string = "  ".repeat(amount)
+
+template translate(val: string): string =
+  case val:
+  of "divider":
+    "div"
+  else:
+    val
+
+proc insert(construct: var seq[Node], value: Node, p: Pointer, offset: var int) =
+  construct.insert value, p.index + offset
+  offset.inc
+
+proc expand(code: NimNode): NimNode =
+  var
+    frontier, temp: seq[Pointer]
+    construct: seq[Node]
+    level: int
+    buffer: string
+  
+  for n in code: 
+    frontier.add((n, 0))
+
+  while frontier.len != 0:
+    var offset: int
+    
+    ifDebug:
+      let
+        nl = "\n"
+        id = ind(level)
+        ni = nl & id
+    do:
+      let id, nl, ni = ""
+        
+    for node in frontier.mitems:
+      case node.node.kind:
+      of nnkIdent:
+        let val = translate node.node.strVal
+        construct.insert str(ni & front(val) & ending(val)), node, offset
+
+      of nnkStrLit, nnkTripleStrLit:
+        construct.insert str(ni & node.node.strVal), node, offset
+      
+      of nnkCommand, nnkCall, nnkPrefix:
+        if (node.node.kind == nnkCall or node.node.kind == nnkCommand) and node.node[0].kind == nnkPrefix:
+          node.node[0] = node.node[0][1]
+          node.node = newTree(nnkPrefix, ident("@"), node.node)
+        
+        if node.node.kind == nnkPrefix:
+          construct.insert str(ni), node, offset
+          construct.insert node(node.node), node, offset
+        else:
+          let val = translate node.node[0].strVal
+          construct.insert str(ni & "<" & val), node, offset
+          
+          var i = 1
+          while i < node.node.len:
+            let n = node.node[i]
+            case n.kind:
+            of nnkInfix:
+              let     
+                op = n[0]
+                id = n[1]
+                vl = n[2]
+      
+              if op.strVal != "&":
+                err("only '&' infix is allowed in attribute definition", n[0])
+              
+              var identifier: string
+              case id.kind:
+              of nnkIdent:
+                identifier = id.strVal
+              of nnkAccQuoted:
+                for n in id:
+                  identifier.add n.strVal
+              else:
+                err("operand of a right side has to be identifier or quoted inside ``", id)
+
+              case vl.kind:
+              of nnkStrLit, nnkTripleStrLit:
+                construct.insert str(" $#=\"$#\"" % [identifier, vl.strVal]), node, offset
+              of nnkPrefix:
+                construct.insert str(" $#=\"" % identifier), node, offset
+                construct.insert node(vl), node, offset
+                construct.insert str("\""), node, offset
+              else:
+                err("value of attribute can be string or prefixed variable from outer scope", vl)
+            of nnkIdent:
+              construct.insert str(" " & n.strVal), node, offset
+            of nnkAccQuoted:
+              var identifier: string
+              for n in n:
+                identifier.add n.strVal
+              construct.insert str(" " & identifier), node, offset
+            else:
+              break
+            
+            i.inc
+        
+          construct.insert str(">"), node, offset
+          
+          var single = true
+          if i == node.node.len - 1:
+            let n = node.node[i]
+            case n.kind:
+            of nnkStrLit, nnkTripleStrLit:
+              construct.insert str(n.strVal), node, offset
+            of nnkStmtList:
+              single = false
+              for n in n:
+                temp.add (n, node.index + offset)
+            of nnkPrefix:
+              construct.insert node(n), node, offset
+            else:
+              err("invalid kind of final value, only string literal or statement list is allowed", n)
+          elif i < node.node.len - 1:
+            err("each tag can have only one final value, everything else has to be attribute", node.node)
+
+          if single:
+            construct.insert str(ending(val)), node, offset
+          else:
+            construct.insert str(ni & ending(val)), node, offset
+      else:
+        err("invalid syntax", node.node)
+    swap(frontier, temp)
+    temp.setLen(0)
+    level.inc
+
+  var 
+    i: int
+  
+  for j in 1..<construct.len:
+    let c = construct[j]
+    var t = construct[i].addr
+    if t.kind == c.kind and t.kind == nkString:
+      t.str.add c.str
     else:
-        result.add(n.strVal)
-
-template debug(s: string): untyped =
-    when defined(debug):
-        buff.add(s)
+      i.inc
+      construct[i] = c
     
-template merge(str: string, exp: NimNode): untyped =
-    let lit = newStringLit(str)
-    result = quote do:
-        `result` & `lit` & `exp`
-
-proc expand(n: NimNode, depth: int = 0): NimNode {.compileTime.} =
-    let space = "  ".repeat(max(depth, 0))
-    if n.matches(Prefix[==ident("@"), @body]):
-        if depth == -1 or not defined(debug):
-            return quote do:
-                $(`body`)
-        return quote do:
-            `space` & $(`body`) & "\n"
+  construct.setLen(i + 1)
     
-    if n.matches(Ident()):
-        when defined(debug):
-            return newLit(space & "<" & n.strVal & "/>\n")
-        else:
-            return newLit("<" & n.strVal & "/>")
-    
-    let nodeOk = n.matches:
-        Command[@name is Ident(), .._] | Call[@name is Ident(), _]
-
-    if not nodeOk:
-        if n.matches(StrLit() | TripleStrLit()):
-            when defined(debug):
-                return newLit(space & n.strVal & "\n")
-            else:
-                return n
-        else:
-            error("invalid syntax")
-
-    if name == ident("divider"):
-        name = ident("div")
-
-    result = newLit("")
-
-    var buff = ""
-
-    debug space
-
-    buff.add("<" & name.strVal)
-
-    if n.matches(Command[_, @value is StrLit()]):
-        buff.add(">" & value.strVal & "</" & name.strVal & ">")
-        debug "\n"
-        return newLit(buff)
-    elif n.matches(Command[_, Prefix[==ident("@"), @body]]):
-        buff.add(">")
-        let lit = newLit(buff)
-        result = quote do:
-            `result` & `lit` & $(`body`)
-        buff = "</" & name.strVal & ">"
-        debug "\n"
-        let lit2 = newLit(buff)
-        result = quote do:
-            `result` & `lit2`
-        return
-    elif n.matches(Command[_, until @args is StmtList(), .._]):
-        for arg in args:
-            if arg.matches(Ident()):
-                buff.add(" " & arg.toString)
-            else:
-                let argOK = arg.matches:
-                            Infix[==ident("&"), @key, @value]
-                if not argOK:
-                    error(
-                        "element attribute has to be in form ˙key & \"value\"˙, key can optionally " & 
-                        "be inside ``, value can be an expression that evaluates to string"
-                    )
-                buff.add(" " & key.toString & "=")
-                if value.matches(StrLit()):
-                    buff.add(value.repr)
-                else:
-                    let lit = newLit(buff)
-                    let value = expand(value, -1)
-                    result = quote do:
-                        `result` & `lit` & "\"" & `value` & "\""
-                    buff = ""
-
-    var last = n[n.len-1]
-    buff.add(">")
-    if last.matches(StmtList()):
-        debug "\n"
-        let lit = newLit(buff)
-        result = quote do:
-            `result` & `lit`
-        buff = ""
-        for n in last:
-            let exp = expand(n, depth + 1)
-            result = quote do:
-                `result` & `exp`
-        debug space
-    
-    buff.add("</" & name.strVal & ">")
-    debug "\n"
-    
-    let lit = newLit(buff)
-    result = quote do:
-        `result` & `lit`
+  result = construct[0].toNimNode()
+  
+  for i in 1..<construct.len:
+    result = newTree(nnkInfix, ident("&"), result, construct[i].toNimNode())
         
 macro niml*(code: untyped): untyped =
     ## niml takes input in form of syntax tree and turns it into string expression
@@ -135,91 +214,8 @@ macro niml*(code: untyped): untyped =
     ## If you need to specify ugly identifier write it as operator. If you prefix
     ## something with @ to refer to it, though expression has to evaluate into string 
     ## of have $ defined. You can use --define:debug to view a formatted html.
-    result = newLit("")
-
-    when isMainModule:
-        echo code.treeRepr
-
-    for n in code:
-        let exp = expand(n)
-        result = quote do:
-            `result` & `exp`
-
-when isMainModule:
-    let brah = "hello there"
-    let val = 10
-    var pg = niml:
-        html lang & "en", kub & "flee":
-            head:
-                meta charset & "UTF-8"
-                meta `http-equiv` & "X-UA-Compatible", content & "IE=edge"
-                meta name & "viewport", content&"width=device-width, initial-scale=1.0"
-                title "Fonting"
-            body:
-                h1 "Hello there"
-                p hello & @brah
-                p @brah
-                p:
-                    @brah
-                    br
-                    @(3 + 5 + val)
-    assert pg == """<html lang="en" kub="flee">
-  <head>
-    <meta charset="UTF-8"></meta>
-    <meta http-equiv="X-UA-Compatible" content="IE=edge"></meta>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0"></meta>
-    <title>Fonting</title>
-  </head>
-  <body>
-    <h1>Hello there</h1>
-    <p hello="hello there"></p>
-    <p>hello there</p>
-    <p>
-      hello there
-      <br/>
-      18
-    </p>
-  </body>
-</html>
-""", pg
-    let ten = 10
-    let text = "text"
-
-    pg = niml:
-        html:
-            head:
-                meta charset & "UTF-8"
-                meta `http-equiv` & "X-UA-Compatible", content & "IE=edge"
-                meta name & "viewport", content&"width=device-width, initial-scale=1.0"
-                title "Niml"
-            body:
-                h1 "Headline"
-                p:
-                    "some text"
-                    br
-                    "some more text"
-                table:
-                    tr:
-                        td @text
-                        td @ten
-                    tr:
-                        td "something else"
-                        td "30"
-                divider attribute & @text, another_attribute & @(ten + 30 - 16), hidden:
-                    "this is actually div but as that is already taken keyword we are using alternative"
-    echo pg
-
-    proc popup(id, callback, message: string, hidden = false): string = 
-        niml:
-            divider id & @id, style & "too lazy for this", hidden & @hidden:
-                h1 @message
-                button id & @(id & "-yes"), onclick & @callback:
-                    "Yes"
-                button onclick & "close-popup", popup_id & @id:
-                    "No"
-
-    pg = niml:
-        @(popup("exit-popup", "exit", "Do you want to exit?", true))
-        @(popup("open-exit-popup", "open-exit", "Do you want to open exit popup?"))
-    
-    echo pg
+    if code[0] == ident("doctype_html"):
+      code.del(0)
+      result = newTree(nnkInfix, ident("&"), newLit("<!doctype html>"), expand(code))
+    else:
+      result = expand(code)

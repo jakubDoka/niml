@@ -9,4 +9,4 @@ srcDir        = "src"
 
 # Dependencies
 
-requires "nim >= 1.4.4", "fusion"
+requires "nim >= 1.4.4"
