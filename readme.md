@@ -1,6 +1,6 @@
 # niml
 
-Niml is domain specific language that translates to string of valid html. Templates can be created easily to support modularity. You can define ui components as procs that take parameters.
+Niml is domain specific language that translates to string of valid html. Templates can be created easily to support modularity. You can define ui components as procs that take parameters. Syntax is documented by tests so if you are not sure just look into package tests folder.
 
 # changelog
 
