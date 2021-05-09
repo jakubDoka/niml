@@ -37,7 +37,11 @@ template str(s: string): Node =
   Node(kind: nkString, str: s)
 
 template node(n: NimNode): Node =
-  let ident = n[0].strVal if n[0].kind == ident else n[0][0].strVal 
+  let ident = 
+    if n[0].kind == nnkIdent:
+      n[0].strVal
+    else: 
+      n[0][0].strVal 
   if ident != "@":
     err("external values can be prefixed only with '@'", n)
   Node(kind: nkNode, node: n[1])
